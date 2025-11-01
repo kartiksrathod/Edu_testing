@@ -1,30 +1,27 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Body, Request
 from jose import jwt, JWTError
 from config import JWT_SECRET_KEY, JWT_ALGORITHM
-from database import db
+from config import db
 from datetime import datetime
 import uuid
 from typing import Optional
 
 router = APIRouter(prefix="/api/admin", tags=["Admin"])
 
-
 def get_current_user(request: Request):
     token = None
 
-    # ✅ Read token from cookie or Authorization header
-    if "Authorization" in request.headers:
-        auth_header = request.headers.get("Authorization")
-        if auth_header and auth_header.startswith("Bearer "):
-            token = auth_header.split(" ")[1]
+    # Read token from cookie or Authorization header
+    auth_header = request.headers.get("Authorization")
+    if auth_header and auth_header.startswith("Bearer "):
+        token = auth_header.split(" ")[1]
     if not token:
-        token = request.cookies.get("access_token")
+        token = request.cookies.get("token")  # Use "token" cookie
 
     if not token:
         raise HTTPException(status_code=401, detail="Missing authentication token")
 
     try:
-        # ✅ Updated to use new config variable names
         payload = jwt.decode(token, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM])
         email = payload.get("sub")
         if not email:
@@ -37,19 +34,18 @@ def get_current_user(request: Request):
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
 
-
 def is_admin_user(user: dict):
-    return bool(user.get("is_admin", False) or user.get("role") == "admin")
+    # Standardize to check only is_admin field here
+    return bool(user.get("is_admin", False))
 
-
-# ---------------- Admin Dashboard ----------------
+# Admin Dashboard
 @router.get("/dashboard")
 async def admin_dashboard(current_user=Depends(get_current_user)):
     if not is_admin_user(current_user):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admins only")
 
     total_users = db.users.count_documents({})
-    total_admins = db.users.count_documents({"$or": [{"is_admin": True}, {"role": "admin"}]})
+    total_admins = db.users.count_documents({"is_admin": True})
     total_students = db.users.count_documents({"role": "student"})
     return {
         "message": f"Welcome Admin {current_user.get('name')}",
@@ -60,7 +56,7 @@ async def admin_dashboard(current_user=Depends(get_current_user)):
         }
     }
 
-# ---------------- Notes CRUD ----------------
+# Notes endpoints
 @router.post("/notes")
 async def add_notes(current_user=Depends(get_current_user), data: dict = Body(...)):
     if not is_admin_user(current_user):
@@ -78,14 +74,12 @@ async def add_notes(current_user=Depends(get_current_user), data: dict = Body(..
     db.notes.insert_one(note)
     return {"message": "Note added successfully", "note": note}
 
-
 @router.get("/notes")
 async def list_notes(skip: int = 0, limit: int = 50, current_user=Depends(get_current_user)):
     if not is_admin_user(current_user):
         raise HTTPException(status_code=403, detail="Admins only")
     cursor = db.notes.find().sort("created_at", -1).skip(skip).limit(limit)
     return {"notes": list(cursor)}
-
 
 @router.put("/notes/{note_id}")
 async def update_note(note_id: str, data: dict = Body(...), current_user=Depends(get_current_user)):
@@ -100,7 +94,6 @@ async def update_note(note_id: str, data: dict = Body(...), current_user=Depends
         raise HTTPException(status_code=404, detail="Note not found")
     return {"message": "Note updated successfully"}
 
-
 @router.delete("/notes/{note_id}")
 async def delete_note(note_id: str, current_user=Depends(get_current_user)):
     if not is_admin_user(current_user):
@@ -110,8 +103,7 @@ async def delete_note(note_id: str, current_user=Depends(get_current_user)):
         raise HTTPException(status_code=404, detail="Note not found")
     return {"message": "Note deleted successfully"}
 
-
-# ---------------- Syllabus CRUD ----------------
+# Syllabus endpoints
 @router.post("/syllabus")
 async def add_syllabus(current_user=Depends(get_current_user), data: dict = Body(...)):
     if not is_admin_user(current_user):
@@ -130,7 +122,6 @@ async def add_syllabus(current_user=Depends(get_current_user), data: dict = Body
     db.syllabus.insert_one(syllabus)
     return {"message": "Syllabus added successfully", "syllabus": syllabus}
 
-
 @router.get("/syllabus")
 async def list_syllabus(course: Optional[str] = None, current_user=Depends(get_current_user)):
     if not is_admin_user(current_user):
@@ -140,7 +131,6 @@ async def list_syllabus(course: Optional[str] = None, current_user=Depends(get_c
         query["course"] = course
     docs = list(db.syllabus.find(query).sort("created_at", -1))
     return {"syllabus": docs}
-
 
 @router.put("/syllabus/{sid}")
 async def update_syllabus(sid: str, data: dict = Body(...), current_user=Depends(get_current_user)):
@@ -155,7 +145,6 @@ async def update_syllabus(sid: str, data: dict = Body(...), current_user=Depends
         raise HTTPException(status_code=404, detail="Syllabus not found")
     return {"message": "Syllabus updated successfully"}
 
-
 @router.delete("/syllabus/{sid}")
 async def delete_syllabus(sid: str, current_user=Depends(get_current_user)):
     if not is_admin_user(current_user):
@@ -165,8 +154,7 @@ async def delete_syllabus(sid: str, current_user=Depends(get_current_user)):
         raise HTTPException(status_code=404, detail="Syllabus not found")
     return {"message": "Syllabus deleted successfully"}
 
-
-# ---------------- Papers CRUD ----------------
+# Papers endpoints
 @router.post("/papers")
 async def add_paper(current_user=Depends(get_current_user), data: dict = Body(...)):
     if not is_admin_user(current_user):
@@ -184,14 +172,12 @@ async def add_paper(current_user=Depends(get_current_user), data: dict = Body(..
     db.papers.insert_one(paper)
     return {"message": "Paper added successfully", "paper": paper}
 
-
 @router.get("/papers")
 async def list_papers(skip: int = 0, limit: int = 50, current_user=Depends(get_current_user)):
     if not is_admin_user(current_user):
         raise HTTPException(status_code=403, detail="Admins only")
     docs = list(db.papers.find().sort("created_at", -1).skip(skip).limit(limit))
     return {"papers": docs}
-
 
 @router.put("/papers/{pid}")
 async def update_paper(pid: str, data: dict = Body(...), current_user=Depends(get_current_user)):
@@ -205,7 +191,6 @@ async def update_paper(pid: str, data: dict = Body(...), current_user=Depends(ge
     if res.matched_count == 0:
         raise HTTPException(status_code=404, detail="Paper not found")
     return {"message": "Paper updated successfully"}
-
 
 @router.delete("/papers/{pid}")
 async def delete_paper(pid: str, current_user=Depends(get_current_user)):

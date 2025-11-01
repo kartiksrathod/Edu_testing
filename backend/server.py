@@ -1,29 +1,23 @@
-# ============================================================
-# ✅ STEP 1: Load environment variables BEFORE anything else
-# ============================================================
 import os
 from pathlib import Path
 from dotenv import load_dotenv
 
 dotenv_path = Path(__file__).resolve().parent / ".env"
-print(f"🔍 Loading .env from: {dotenv_path}")
+print(f"Loading .env from: {dotenv_path}")
 load_dotenv(dotenv_path)
 
-# ============================================================
-# ✅ STEP 2: Imports
-# ============================================================
 import uuid
 import logging
 from datetime import datetime, timedelta
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from passlib.context import CryptContext
 from jose import JWTError, jwt
 from pydantic import BaseModel, EmailStr
 import importlib
 import pkgutil
 
-# ✅ Central Config
 from config import (
     db,
     JWT_SECRET_KEY,
@@ -32,43 +26,40 @@ from config import (
     ALLOWED_ORIGINS,
 )
 
-# ============================================================
-# ✅ STEP 3: Logging Setup
-# ============================================================
 LOG_DIR = os.path.join(os.getcwd(), "app_logging", "logs")
 os.makedirs(LOG_DIR, exist_ok=True)
+
 logging.basicConfig(
-    filename=os.path.join(LOG_DIR, "app.log"),
     level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers=[
+        logging.FileHandler(os.path.join(LOG_DIR, "app.log")),
+        logging.StreamHandler()
+    ]
 )
 logger = logging.getLogger(__name__)
-logger.info("✅ Logging initialized")
+logger.info("Logging initialized")
 
-# ============================================================
-# ✅ STEP 4: Password Hashing & JWT
-# ============================================================
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 def create_access_token(data: dict, expires_delta: timedelta | None = None):
-    """Generate JWT token"""
     to_encode = data.copy()
     expire = datetime.utcnow() + (expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, JWT_SECRET_KEY, algorithm=JWT_ALGORITHM)
 
 def verify_token(token: str):
-    """Decode JWT and verify validity"""
     try:
         payload = jwt.decode(token, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM])
         return payload
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
 
-# ============================================================
-# ✅ STEP 5: FastAPI App Initialization
-# ============================================================
-app = FastAPI(title="EduResources API")
+app = FastAPI(
+    title="EduResources API",
+    description="Academic Resources Management System",
+    version="1.0.0"
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -78,9 +69,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ============================================================
-# ✅ STEP 6: Pydantic Models
-# ============================================================
 class UserRegister(BaseModel):
     name: str
     email: EmailStr
@@ -93,113 +81,139 @@ class UserLogin(BaseModel):
     email: EmailStr
     password: str
 
-# ============================================================
-# ✅ STEP 7: Auth Routes
-# ============================================================
-@app.post("/api/auth/register")
+@app.post("/api/auth/register", tags=["Authentication"])
 async def register(user: UserRegister):
     if db is None:
+        logger.error("Database not connected during registration")
         raise HTTPException(status_code=500, detail="Database not connected")
+    try:
+        users_collection = db.users
+        existing_user = users_collection.find_one({"email": user.email})
+        if existing_user:
+            logger.warning(f"Registration attempt with existing email: {user.email}")
+            raise HTTPException(status_code=400, detail="User already exists")
+        hashed_password = pwd_context.hash(user.password)
+        user_id = str(uuid.uuid4())
+        user_doc = {
+            "_id": user_id,
+            "name": user.name,
+            "email": user.email,
+            "password": hashed_password,
+            "usn": user.usn,
+            "course": user.course,
+            "semester": user.semester,
+            "is_admin": users_collection.count_documents({}) == 0,
+            "created_at": datetime.utcnow(),
+        }
+        users_collection.insert_one(user_doc)
+        logger.info(f"New user registered: {user.email}")
+        token = create_access_token({"sub": user.email, "is_admin": user_doc["is_admin"]})
+        return {"message": "User registered successfully", "token": token, "user_id": user_id}
+    except Exception as e:
+        logger.error(f"Registration error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
-    users_collection = db.users
-    existing_user = users_collection.find_one({"email": user.email})
-    if existing_user:
-        raise HTTPException(status_code=400, detail="User already exists")
-
-    hashed_password = pwd_context.hash(user.password)
-    user_id = str(uuid.uuid4())
-
-    user_doc = {
-        "_id": user_id,
-        "name": user.name,
-        "email": user.email,
-        "password": hashed_password,
-        "usn": user.usn,
-        "course": user.course,
-        "semester": user.semester,
-        "is_admin": users_collection.count_documents({}) == 0,  # first user = admin
-        "created_at": datetime.utcnow(),
-    }
-
-    users_collection.insert_one(user_doc)
-    logger.info(f"👤 New user registered: {user.email}")
-
-    token = create_access_token({"sub": user.email, "is_admin": user_doc["is_admin"]})
-    return {"message": "User registered successfully", "token": token, "user_id": user_id}
-
-
-@app.post("/api/auth/login")
+@app.post("/api/auth/login", tags=["Authentication"])
 async def login(user: UserLogin):
     if db is None:
+        logger.error("Database not connected during login")
         raise HTTPException(status_code=500, detail="Database not connected")
+    try:
+        users_collection = db.users
+        existing_user = users_collection.find_one({"email": user.email})
+        if not existing_user or not pwd_context.verify(user.password, existing_user["password"]):
+            logger.warning(f"Failed login attempt: {user.email}")
+            raise HTTPException(status_code=401, detail="Invalid credentials")
+        is_admin = existing_user.get("is_admin", False)
+        token = create_access_token({"sub": user.email, "is_admin": is_admin})
 
-    users_collection = db.users
-    existing_user = users_collection.find_one({"email": user.email})
+        logger.info(f"User logged in: {user.email} | Admin: {is_admin}")
 
-    if not existing_user or not pwd_context.verify(user.password, existing_user["password"]):
-        raise HTTPException(status_code=401, detail="Invalid credentials")
+        # IMPORTANT: Return the response object on which you set_cookie
+        response = JSONResponse(
+            {
+                "message": "Login successful",
+                "user": {
+                    "name": existing_user["name"],
+                    "email": existing_user["email"],
+                    "usn": existing_user.get("usn"),
+                    "course": existing_user.get("course"),
+                    "semester": existing_user.get("semester"),
+                    "is_admin": is_admin,
+                },
+            }
+        )
+        response.set_cookie(
+            key="token",
+            value=token,
+            httponly=True,
+            secure=False,  # False in development; True in production with HTTPS
+            samesite="lax",
+            max_age=ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+            expires=ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+            path="/",
+        )
+        return response
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Login error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
-    is_admin = existing_user.get("is_admin", False)
-    token = create_access_token({"sub": user.email, "is_admin": is_admin})
-
-    logger.info(f"✅ User logged in: {user.email} | Admin: {is_admin}")
-
-    return {
-        "message": "Login successful",
-        "token": token,
-        "user": {
-            "name": existing_user["name"],
-            "email": existing_user["email"],
-            "usn": existing_user.get("usn"),
-            "course": existing_user.get("course"),
-            "semester": existing_user.get("semester"),
-            "is_admin": is_admin,
-        },
-    }
-
-
-@app.get("/api/profile")
+@app.get("/api/auth/profile", tags=["Authentication"])
 async def profile(request: Request):
-    token = request.headers.get("Authorization")
-    if not token or not token.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Token missing or invalid")
-
-    payload = verify_token(token.split(" ")[1])
-    email = payload.get("sub")
-
-    user = db.users.find_one({"email": email}, {"password": 0})
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-
-    return user
-
-# ============================================================
-# ✅ STEP 8: Auto-Import All Routers from /routes
-# ============================================================
-import routes
+    try:
+        token = request.cookies.get("token")
+        if not token:
+            raise HTTPException(status_code=401, detail="Token missing or invalid")
+        payload = verify_token(token)
+        email = payload.get("sub")
+        user = db.users.find_one({"email": email}, {"password": 0})
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        return user
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Profile fetch error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 def auto_include_routers(app):
-    """Automatically include all routers from the 'routes' package."""
-    for _, module_name, _ in pkgutil.iter_modules(routes.__path__):
-        module = importlib.import_module(f"routes.{module_name}")
-        if hasattr(module, "router"):
-            prefix = f"/api/{module_name.replace('_routes', '')}"
-            tag = module_name.replace("_routes", "").capitalize()
-            app.include_router(module.router, prefix=prefix, tags=[tag])
-            logger.info(f"✅ Router loaded: {module_name} -> {prefix}")
+    try:
+        import routes
+        for _, module_name, _ in pkgutil.iter_modules(routes.__path__):
+            try:
+                module = importlib.import_module(f"routes.{module_name}")
+                if hasattr(module, "router"):
+                    prefix = f"/api/{module_name}".replace("_routes", "")
+                    tag = module_name.replace("_", " ").title()
+                    app.include_router(module.router, prefix=prefix, tags=[tag])
+                    logger.info(f"Router loaded: {module_name} -> {prefix}")
+            except Exception as e:
+                logger.error(f"Error loading router {module_name}: {str(e)}")
+    except Exception as e:
+        logger.error(f"Error auto-loading routers: {str(e)}")
 
 auto_include_routers(app)
 
-# ============================================================
-# ✅ STEP 9: Root Endpoint
-# ============================================================
-@app.get("/")
-async def root():
-    return {"message": "🚀 EduResources Backend Running Successfully!"}
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    logger.warning(f"HTTP Exception: {exc.status_code} - {exc.detail}")
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail}
+    )
 
-# ============================================================
-# ✅ STEP 10: Run Server
-# ============================================================
+@app.get("/health", tags=["System"])
+async def health_check():
+    db_status = "connected" if db is not None else "disconnected"
+    return {"status": "healthy", "database": db_status}
+
+@app.get("/", tags=["System"])
+async def root():
+    return {"message": "EduResources Backend Running Successfully!"}
+
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("server:app", host="0.0.0.0", port=8000, reload=True)
+    logger.info("Starting server...")
+    uvicorn.run("server:app", host="localhost", port=8000, reload=True, log_level="info")

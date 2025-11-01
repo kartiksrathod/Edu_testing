@@ -78,19 +78,25 @@ const Papers = () => {
     setFilteredPapers(filtered);
   };
 
-  const handleDownload = async (paper) => {
-    if (!currentUser) {
-      toast({ title: "Login Required", description: "Please login to download papers.", variant: "destructive" });
-      return;
-    }
-    try {
-      const paperId = paper.id || paper._id;
-      await papersAPI.download(paperId, { headers: getAuthHeader() });
-      toast({ title: "Download Complete", description: `Downloaded: ${paper.title}` });
-    } catch (error) {
-      toast({ title: "Download Failed", description: "Unable to download the paper. Please try again.", variant: "destructive" });
-    }
-  };
+ // Same imports and state management as before
+// ...
+
+const handleDownload = async (paper) => {
+  if (!currentUser) {
+    toast({ title: 'Login Required', description: 'Please login to download papers.', variant: 'destructive' });
+    return;
+  }
+  try {
+    const paperId = paper.id || paper._id;
+    await papersAPI.download(paperId); // no extra headers
+    toast({ title: 'Download Complete', description: `Downloaded: ${paper.title}` });
+  } catch (error) {
+    toast({ title: 'Download Failed', description: 'Unable to download the paper. Please try again.', variant: 'destructive' });
+  }
+};
+
+// ... rest of your Papers.jsx unchanged ...
+
 
   const handleView = (paper) => {
     if (!currentUser) {

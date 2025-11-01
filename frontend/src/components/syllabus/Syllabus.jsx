@@ -82,18 +82,20 @@ const Syllabus = () => {
   };
 
   const handleDownload = async (item) => {
-    if (!currentUser) {
-      toast({ title: "Login Required", description: "Please login to download syllabus.", variant: "destructive" });
-      return;
-    }
-    try {
-      const syllabusId = item.id || item._id;
-      await syllabusAPI.download(syllabusId, { headers: getAuthHeader() });
-      toast({ title: "Download Complete", description: `Downloaded: ${item.title}` });
-    } catch (error) {
-      toast({ title: "Download Failed", description: "Unable to download the syllabus. Please try again.", variant: "destructive" });
-    }
-  };
+  if (!currentUser) {
+    toast({ title: "Login Required", description: "Please login to download syllabus.", variant: "destructive" });
+    return;
+  }
+  try {
+    const syllabusId = item.id || item._id;
+    // Remove second argument so headers are not passed here
+    await syllabusAPI.download(syllabusId);
+    toast({ title: "Download Complete", description: `Downloaded: ${item.title}` });
+  } catch (error) {
+    toast({ title: "Download Failed", description: "Unable to download the syllabus. Please try again.", variant: "destructive" });
+  }
+};
+
 
   const handleView = (item) => {
     if (!currentUser) {

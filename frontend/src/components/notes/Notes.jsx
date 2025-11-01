@@ -106,22 +106,24 @@ const Notes = () => {
   };
 
   const handleDownload = async (note) => {
-    if (!currentUser) {
-      toast({
-        title: "Login Required",
-        description: "Please login to download notes.",
-        variant: "destructive"
-      });
-      return;
-    }
-    try {
-      const noteId = note.id || note._id;
-      await notesAPI.download(noteId, { headers: getAuthHeader() });
-      toast({ title: "Download Complete", description: `Downloaded: ${note.title}` });
-    } catch (error) {
-      toast({ title: "Download Failed", description: "Unable to download the note.", variant: "destructive" });
-    }
-  };
+  if (!currentUser) {
+    toast({
+      title: "Login Required",
+      description: "Please login to download notes.",
+      variant: "destructive"
+    });
+    return;
+  }
+  try {
+    const noteId = note.id || note._id;
+    // Remove the headers argument to match api.js's download method signature
+    await notesAPI.download(noteId);
+    toast({ title: "Download Complete", description: `Downloaded: ${note.title}` });
+  } catch (error) {
+    toast({ title: "Download Failed", description: "Unable to download the note.", variant: "destructive" });
+  }
+};
+
 
   const handleView = (note) => {
     if (!currentUser) {
